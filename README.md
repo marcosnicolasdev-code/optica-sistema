@@ -1,6 +1,8 @@
 # Sistema de Gestión Óptica · Contactología
 
-Sistema para registrar y consultar las fichas de clientes del área de contactología de una óptica. Reemplaza las fichas en papel por una base de datos con historial completo: qué recetó el oftalmólogo, qué lentes se probaron, qué terminó usando el cliente, qué compró y en qué estado está su pedido.
+Sistema para registrar y consultar las fichas de clientes del área de contactología de una óptica. Reemplaza las fichas en papel por una base de datos con historial completo: qué recetó el oftalmólogo, qué lentes se probaron, qué terminó usando el cliente, qué compró, en qué estado está su pedido y cuándo es su próximo turno.
+
+Está diseñado para crecer: el modelo ya contempla sumar caja diaria, el área de óptica tradicional (armazones y cristales) y facturación electrónica.
 
 > **Estado:** en desarrollo · Etapa 0, relevamiento. Ver [Estado del proyecto](#estado-del-proyecto).
 
@@ -22,8 +24,9 @@ Hoy cada cliente tiene una ficha en papel con sus datos, la graduación de la re
 - **Receta, prueba y conclusión:** la graduación indicada por el oftalmólogo, los pares probados con su resultado y la conclusión final por ojo, con marca y tipo de lente. Si una prueba no se tolera, se registra otra con otra marca.
 - **Dos caminos de alta:** quien nunca usó lentes de contacto pasa obligatoriamente por receta, prueba y conclusión. Quien ya los usa puede registrarse solo con la conclusión, para dejar constancia de lo que viene usando.
 - **Actualizaciones con historial:** una nueva receta, un cambio de marca o de graduación crea una adaptación nueva. Nada se sobrescribe.
-- **Ventas y pedidos:** cajas por ojo o para ambos ojos, promociones, seña y pagos parciales con saldo calculado, y seguimiento del pedido (pedido, recibido, notificado, entregado) con la fecha de cada paso.
-- **Panel de pendientes:** lentes recibidas sin avisar, avisadas sin retirar y ventas con saldo.
+- **Ventas y pedidos:** lentes por ojo o para ambos ojos, otros productos como líquidos o estuches, promociones, seña y pagos parciales con su medio de pago, saldo calculado y seguimiento del pedido (pedido, recibido, notificado, entregado) con la fecha de cada paso.
+- **Turnos:** agenda semanal con cupo diario configurable, turnos para clientes nuevos sin ficha, control agendado desde la adaptación y recordatorio por WhatsApp con un clic.
+- **Pantalla de inicio:** turnos de hoy y mañana, lentes recibidas sin avisar, avisadas sin retirar y ventas con saldo.
 
 ## Reglas de negocio
 
@@ -32,7 +35,8 @@ Hoy cada cliente tiene una ficha en papel con sus datos, la graduación de la re
 3. **Un oftalmólogo se identifica por tipo y número de matrícula** (MN o MP). La combinación es única en la base.
 4. **Nada se pisa.** Adaptaciones, pagos y estados del pedido se acumulan como historial.
 5. **El total y el saldo se calculan.** Total: cajas por precio de cada ítem, menos descuento. Saldo: total menos pagos.
-6. **Los clientes no se borran.** La baja es lógica para conservar el historial.
+6. **Los turnos respetan un cupo diario** configurable, sin superposiciones ni fechas pasadas.
+7. **Los clientes no se borran.** La baja es lógica para conservar el historial.
 
 ## Modelo de datos
 
@@ -46,12 +50,14 @@ erDiagram
     ADAPTACION ||--o{ PRUEBA : tolerancia
     PRUEBA ||--|{ PRUEBA_OJO : "par probado"
     ADAPTACION ||--|{ CONCLUSION_OJO : "lo que usa"
-    LENTE ||--o{ PRUEBA_OJO : "se prueba"
-    LENTE ||--o{ CONCLUSION_OJO : "se indica"
+    PRODUCTO ||--o| LENTE_CONTACTO : especializa
+    LENTE_CONTACTO ||--o{ PRUEBA_OJO : "se prueba"
+    LENTE_CONTACTO ||--o{ CONCLUSION_OJO : "se indica"
     CLIENTE ||--o{ VENTA : compra
     ADAPTACION |o--o{ VENTA : "se vende"
     VENTA ||--|{ ITEM_VENTA : detalle
-    LENTE ||--o{ ITEM_VENTA : "se vende"
+    PRODUCTO ||--o{ ITEM_VENTA : "se vende"
+    CLIENTE |o--o{ TURNO : reserva
     VENTA ||--o{ PAGO : "se paga con"
     VENTA ||--|{ ESTADO_VENTA : historial
 
@@ -82,6 +88,7 @@ erDiagram
         decimal cilindro
         int eje
         decimal adicion
+        string distancia "lejos o cerca"
     }
     ADAPTACION {
         date fecha
@@ -109,26 +116,38 @@ erDiagram
         decimal curva_base "opcional"
         decimal diametro "opcional"
     }
-    LENTE {
+    PRODUCTO {
         string marca
         string modelo
+        string categoria
+        decimal precio_actual
+        bool activo
+    }
+    LENTE_CONTACTO {
         string tipo "esférica, tórica, multifocal"
         string modalidad
         int unidades_por_caja
-        decimal precio_actual
     }
     VENTA {
         date fecha
         decimal descuento
     }
     ITEM_VENTA {
-        string ojo "OD, OI o AMBOS"
-        int cajas
+        string ojo "OD, OI, AMBOS u opcional"
+        int cantidad
         decimal precio_unitario
     }
     PAGO {
         date fecha
         decimal monto
+        string medio
+    }
+    TURNO {
+        datetime fecha_hora
+        string nombre "si no tiene ficha"
+        string telefono "si no tiene ficha"
+        string motivo
+        string estado "pendiente, asistió, ausente, cancelado"
     }
     ESTADO_VENTA {
         string estado "pedido, recibido, notificado, entregado"
@@ -160,10 +179,15 @@ erDiagram
 | Prueba y conclusión separadas | Una adaptación puede tener varias pruebas, pero una sola conclusión por ojo. Quien ya usa lentes puede tener conclusión sin prueba. |
 | Receta opcional en la adaptación | Permite registrar a quien ya usa lentes sin inventar datos que no trae. |
 | Matrícula única por tipo y número | El mismo número puede existir como matrícula nacional y provincial. La restricción vive en la base, no solo en el formulario. |
+| Recetas en una app propia | La receta la usan contactología y, a futuro, óptica tradicional, sin depender un módulo del otro. |
+| `Producto` general y `LenteContacto` que hereda | Las ventas apuntan a cualquier producto (lentes, líquidos, estuches y, más adelante, armazones y cristales) sin cambiar claves foráneas con datos cargados. |
 | Estados del pedido como historial | Se sabe cuándo se pidió, recibió, avisó y entregó cada pedido, no solo el último estado. |
+| Medio de pago desde el inicio | Es la base de la futura caja diaria y permite analizar cobros sin rehacer los datos. |
+| Cupo de turnos en configuración | Hoy son dos por día; si la óptica crece se cambia sin tocar el código. |
+| Recordatorio por enlace de WhatsApp | Abre el chat con el mensaje escrito. Gratis y sin integraciones; el envío automático requiere una API paga. |
 | Total y saldo calculados | Nunca se guardan: se derivan de ítems y pagos. En el relevamiento, la mayoría de los saldos escritos a mano tenían errores. |
 | `DecimalField` para graduaciones y montos | Los valores van en pasos de 0,25 y no admiten errores de redondeo de `float`. |
-| Una app de Django por dominio | `clientes`, `profesionales`, `contactologia`, `catalogo` y `ventas` crecen de forma independiente. |
+| Una app de Django por dominio | `clientes`, `profesionales`, `recetas`, `contactologia`, `catalogo`, `ventas` y `turnos` crecen de forma independiente. |
 
 ## Cómo levantarlo en local
 
@@ -198,6 +222,7 @@ El sistema queda disponible en `http://localhost:8000` y el panel de administrac
 | `DB_PASSWORD` | Contraseña de PostgreSQL |
 | `DB_HOST` | Host, normalmente `localhost` |
 | `DB_PORT` | Puerto, normalmente `5432` |
+| `TURNOS_POR_DIA` | Cupo diario de turnos, por defecto `2` |
 
 ## Estado del proyecto
 
@@ -208,11 +233,21 @@ El sistema queda disponible en `http://localhost:8000` y el panel de administrac
 | 2 · Clientes | Alta, edición, búsqueda y ficha | Pendiente |
 | 3 · Oftalmólogos y recetas | Búsqueda por matrícula y graduación indicada | Pendiente |
 | 4 · Adaptación | Prueba de tolerancia, conclusión y actualizaciones | Pendiente |
-| 5 · Ventas y pedidos | Cajas, seña, saldo, estados y panel de pendientes | Pendiente |
-| 6 · Pulido | Validaciones, inicio, datos de demostración y v1.0 | Pendiente |
-| 7 · Instalación y demo | Ventana propia, arranque automático, backup y demo online | Pendiente |
+| 5 · Ventas y pedidos | Ítems, seña, medio de pago, saldo, estados y panel de pendientes | Pendiente |
+| 6 · Turnos | Agenda con cupo, control desde la adaptación y recordatorio por WhatsApp | Pendiente |
+| 7 · Pulido | Validaciones, inicio, datos de demostración y v1.0 | Pendiente |
+| 8 · Instalación y demo | Ventana propia, arranque automático, backup y demo online | Pendiente |
 
-**Próximas versiones:** sugerencia de los parámetros que fabrica cada lente, recordatorio de reposición, login por usuario, seguimiento de lentes de prueba encargadas y un módulo de óptica tradicional (armazones y cristales).
+### Hoja de ruta
+
+| Versión | Contenido |
+|---|---|
+| v1.0 | Contactología completa: fichas, recetas, adaptaciones, ventas, pedidos y turnos |
+| v1.1 | Caja diaria: apertura, movimientos por medio de pago, cierre y arqueo |
+| v2.0 | Óptica tradicional: órdenes de trabajo con armazón, cristales, distancia pupilar y laboratorio |
+| v2.x | Facturación electrónica ARCA, desarrollada en el ambiente de homologación |
+
+Otras ideas: sugerencia de los parámetros que fabrica cada lente, recordatorio de reposición, login por usuario y seguimiento de lentes de prueba encargadas.
 
 ## Privacidad
 
